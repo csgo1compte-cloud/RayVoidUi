@@ -1961,6 +1961,12 @@ function RayfieldLibrary:CreateWindow(Settings)
 	LoadingFrame.Title.Text = Settings.LoadingTitle or "Rayfield"
 	LoadingFrame.Subtitle.Text = Settings.LoadingSubtitle or "Interface Suite"
 
+	-- FIX: Settings.Name n'était jamais appliqué à la topbar (contrairement à tous les
+	-- autres composants qui font Component.Title.Text = ComponentSettings.Name)
+	if Topbar:FindFirstChild('Title') then
+		Topbar.Title.Text = Settings.Name or "Rayfield"
+	end
+
 	if Settings.LoadingTitle ~= "Rayfield Interface Suite" then
 		LoadingFrame.Version.Text = "Rayfield UI"
 	end
