@@ -3,7 +3,7 @@
 -- Enable Auto-Collect to sell your crates every 2 minutes.
 
 
-local Ui = loadstring(game:HttpGet("https://raw.githubusercontent.com/csgo1compte-cloud/HUB/refs/heads/main/RayVoid"))()
+local Ui = loadstring(game:HttpGet("https://raw.githubusercontent.com/csgo1compte-cloud/RayVoidUi/refs/heads/main/RAYVOIDFIX"))()
 Ui:SetScriptName("BARF")
 Ui:ShowCredit()
 
