@@ -1961,12 +1961,6 @@ function RayfieldLibrary:CreateWindow(Settings)
 	LoadingFrame.Title.Text = Settings.LoadingTitle or "Rayfield"
 	LoadingFrame.Subtitle.Text = Settings.LoadingSubtitle or "Interface Suite"
 
-	-- FIX: Settings.Name n'était jamais appliqué à la topbar (contrairement à tous les
-	-- autres composants qui font Component.Title.Text = ComponentSettings.Name)
-	if Topbar:FindFirstChild('Title') then
-		Topbar.Title.Text = Settings.Name or "Rayfield"
-	end
-
 	if Settings.LoadingTitle ~= "Rayfield Interface Suite" then
 		LoadingFrame.Version.Text = "Rayfield UI"
 	end
@@ -3882,7 +3876,11 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local dropH        = math.min(dropFullH, DROP_MAX_H)
 
 			-- Conteneur extérieur (bordure + positionnement)
-			local dropList = VMakeFrame(TabPage,
+			-- Parenté à Rayfield.Main (pas TabPage) : TabPage est une ScrollingFrame,
+			-- qui force ClipsDescendants = true et coupait le dropdown au-delà de
+			-- sa zone visible (d'où l'impossibilité de scroller jusqu'aux dernières
+			-- raretés).
+			local dropList = VMakeFrame(Rayfield.Main,
 				UDim2.new(0, 0, 0, dropH),
 				UDim2.new(0, 0, 0, 0),
 				VC.BgMid, 0
@@ -3911,6 +3909,48 @@ function RayfieldLibrary:CreateWindow(Settings)
 			dropLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			dropLayout.Parent    = dropScroll
 
+			-- Boutons ▲/▼ manuels : contournent tout souci de clip/wheel-routing
+			-- en manipulant directement CanvasPosition. Affichés seulement si
+			-- la liste dépasse la hauteur max visible.
+			if dropFullH > DROP_MAX_H then
+				local ARROW_H     = 18
+				local SCROLL_STEP = DROP_ITEM_H * 3
+
+				local function clampCanvasY(y)
+					local maxY = math.max(dropFullH - dropH, 0)
+					return math.clamp(y, 0, maxY)
+				end
+
+				local function makeArrowBtn(symbol, posY)
+					local btn = Instance.new("TextButton")
+					btn.Size                  = UDim2.new(1, 0, 0, ARROW_H)
+					btn.Position              = posY
+					btn.BackgroundColor3      = VC.BgMid
+					btn.BackgroundTransparency = 0.15
+					btn.BorderSizePixel       = 0
+					btn.AutoButtonColor       = false
+					btn.Text                  = symbol
+					btn.TextColor3            = VC.TextMid
+					btn.TextSize              = 12
+					btn.Font                  = Enum.Font.GothamBold
+					btn.ZIndex                = 63
+					btn.Parent                = dropList
+					btn.MouseEnter:Connect(function() btn.BackgroundTransparency = 0 end)
+					btn.MouseLeave:Connect(function() btn.BackgroundTransparency = 0.15 end)
+					return btn
+				end
+
+				local upBtn   = makeArrowBtn("▲", UDim2.new(0, 0, 0, 0))
+				local downBtn = makeArrowBtn("▼", UDim2.new(0, 0, 1, -ARROW_H))
+
+				upBtn.MouseButton1Click:Connect(function()
+					dropScroll.CanvasPosition = Vector2.new(0, clampCanvasY(dropScroll.CanvasPosition.Y - SCROLL_STEP))
+				end)
+				downBtn.MouseButton1Click:Connect(function()
+					dropScroll.CanvasPosition = Vector2.new(0, clampCanvasY(dropScroll.CanvasPosition.Y + SCROLL_STEP))
+				end)
+			end
+
 			local dropOpen = false
 
 			local function CloseDropdown()
@@ -3922,13 +3962,13 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local function UpdateDropPos()
 				local absPos  = dropBg.AbsolutePosition
 				local absSize = dropBg.AbsoluteSize
-				local sfPos   = TabPage.AbsolutePosition
+				local mainPos = Rayfield.Main.AbsolutePosition
 				dropList.Size     = UDim2.new(0, absSize.X, 0, dropH)
 				dropScroll.Size   = UDim2.new(1, 0, 0, dropH)
 				dropList.Position = UDim2.new(0,
-					absPos.X - sfPos.X,
+					absPos.X - mainPos.X,
 					0,
-					absPos.Y - sfPos.Y + absSize.Y + 2
+					absPos.Y - mainPos.Y + absSize.Y + 2
 				)
 			end
 
@@ -4089,7 +4129,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 					VTween(optBtn, { TextColor3 = VC.TextMid }, 0.1)
 					optBtn.BackgroundTransparency = 1
 				end)
-				optBtn.MouseButton1Down:Connect(function()
+				optBtn.MouseButton1Click:Connect(function()
 					currentGroup  = label
 					selLabel.Text = label
 					CloseDropdown()
