@@ -121,7 +121,7 @@ local seedScrollFrame = Players.LocalPlayer.PlayerGui.MainUI.Menus.IndexFrame.Ma
 
 local rarityOrder = {
     "Common", "Uncommon", "Rare", "Epic", "Legendary",
-    "Divine", "Prismatic", "Secret", "Exotic", "Transcended"
+    "Divine", "Prismatic", "Secret", "Exotic", "Transcended", "Celestial", "Eternal"
 }
 
 
