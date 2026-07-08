@@ -3909,6 +3909,48 @@ function RayfieldLibrary:CreateWindow(Settings)
 			dropLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			dropLayout.Parent    = dropScroll
 
+			-- Boutons ▲/▼ manuels : contournent tout souci de clip/wheel-routing
+			-- en manipulant directement CanvasPosition. Affichés seulement si
+			-- la liste dépasse la hauteur max visible.
+			if dropFullH > DROP_MAX_H then
+				local ARROW_H     = 18
+				local SCROLL_STEP = DROP_ITEM_H * 3
+
+				local function clampCanvasY(y)
+					local maxY = math.max(dropFullH - dropH, 0)
+					return math.clamp(y, 0, maxY)
+				end
+
+				local function makeArrowBtn(symbol, posY)
+					local btn = Instance.new("TextButton")
+					btn.Size                  = UDim2.new(1, 0, 0, ARROW_H)
+					btn.Position              = posY
+					btn.BackgroundColor3      = VC.BgMid
+					btn.BackgroundTransparency = 0.15
+					btn.BorderSizePixel       = 0
+					btn.AutoButtonColor       = false
+					btn.Text                  = symbol
+					btn.TextColor3            = VC.TextMid
+					btn.TextSize              = 12
+					btn.Font                  = Enum.Font.GothamBold
+					btn.ZIndex                = 63
+					btn.Parent                = dropList
+					btn.MouseEnter:Connect(function() btn.BackgroundTransparency = 0 end)
+					btn.MouseLeave:Connect(function() btn.BackgroundTransparency = 0.15 end)
+					return btn
+				end
+
+				local upBtn   = makeArrowBtn("▲", UDim2.new(0, 0, 0, 0))
+				local downBtn = makeArrowBtn("▼", UDim2.new(0, 0, 1, -ARROW_H))
+
+				upBtn.MouseButton1Click:Connect(function()
+					dropScroll.CanvasPosition = Vector2.new(0, clampCanvasY(dropScroll.CanvasPosition.Y - SCROLL_STEP))
+				end)
+				downBtn.MouseButton1Click:Connect(function()
+					dropScroll.CanvasPosition = Vector2.new(0, clampCanvasY(dropScroll.CanvasPosition.Y + SCROLL_STEP))
+				end)
+			end
+
 			local dropOpen = false
 
 			local function CloseDropdown()
@@ -4087,7 +4129,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 					VTween(optBtn, { TextColor3 = VC.TextMid }, 0.1)
 					optBtn.BackgroundTransparency = 1
 				end)
-				optBtn.MouseButton1Down:Connect(function()
+				optBtn.MouseButton1Click:Connect(function()
 					currentGroup  = label
 					selLabel.Text = label
 					CloseDropdown()
