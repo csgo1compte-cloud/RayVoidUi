@@ -4091,7 +4091,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 					VTween(optBtn, { TextColor3 = VC.TextMid }, 0.1)
 					optBtn.BackgroundTransparency = 1
 				end)
-				optBtn.MouseButton1Down:Connect(function()
+				optBtn.MouseButton1Click:Connect(function()
 					currentGroup  = label
 					selLabel.Text = label
 					CloseDropdown()
@@ -4116,8 +4116,9 @@ function RayfieldLibrary:CreateWindow(Settings)
 				end
 			end)
 
-			UserInputService.InputBegan:Connect(function(input)
+			UserInputService.InputBegan:Connect(function(input, processed)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 and dropOpen then
+					if processed then return end  -- le clic a été capté par un bouton (option, flèche, etc.) — ne pas fermer
 					local mp    = UserInputService:GetMouseLocation()
 					local bPos  = dropBg.AbsolutePosition
 					local bSize = dropBg.AbsoluteSize
@@ -4128,6 +4129,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 					if not inBtn and not inDrop then CloseDropdown() end
 				end
 			end)
+
 
 			BuildGrid(currentGroup)
 
