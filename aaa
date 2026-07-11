@@ -5557,7 +5557,7 @@ do
 			end
 		end
 
-		game:BindToClose(_endSession)
+		pcall(function() game:BindToClose(_endSession) end)
 		player.AncestryChanged:Connect(function()
 			if not player.Parent then _endSession() end
 		end)
