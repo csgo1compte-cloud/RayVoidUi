@@ -5425,7 +5425,7 @@ function RayfieldLibrary:ShowCredit(onClose)
 	discordBtn.Font             = Enum.Font.GothamBold
 	discordBtn.TextSize         = useMobile and 13 or 15
 	discordBtn.BorderSizePixel  = 0
-	discordBtn.Text             = "🎉 discord.gg/ztnxx5FJk — JOIN US! (click to copy)"
+	discordBtn.Text             = "🎉 discord.gg/KWVTcdp9YW — JOIN US! (click to copy)"
 	discordBtn.Parent           = bg
 	discordBtn.MouseButton1Click:Connect(function()
 		pcall(setclipboard, "https://discord.gg/KWVTcdp9YW")
