@@ -2687,6 +2687,47 @@ function RayfieldLibrary:CreateWindow(Settings)
 			return ParagraphValue
 		end
 
+		-- Rich Paragraph — comme CreateParagraph mais RichText activé (balises <font>,
+		-- <b>, <i>...) + couleur de bordure/accent optionnelle (cfg.Color).
+		function Tab:CreateRichParagraph(ParagraphSettings)
+			local ParagraphValue = {}
+
+			local Paragraph = Elements.Template.Paragraph:Clone()
+			Paragraph.Title.RichText   = true
+			Paragraph.Content.RichText = true
+			Paragraph.Title.Text   = ParagraphSettings.Title or ""
+			Paragraph.Content.Text = ParagraphSettings.Content or ""
+			Paragraph.Visible = true
+			Paragraph.Parent = TabPage
+
+			Paragraph.BackgroundTransparency = 1
+			Paragraph.UIStroke.Transparency = 1
+			Paragraph.Title.TextTransparency = 1
+			Paragraph.Content.TextTransparency = 1
+
+			local accent = ParagraphSettings.Color
+			Paragraph.BackgroundColor3 = SelectedTheme.SecondaryElementBackground
+			Paragraph.UIStroke.Color = accent or SelectedTheme.SecondaryElementStroke
+			if accent then Paragraph.UIStroke.Thickness = 1 end
+
+			TweenService:Create(Paragraph, TweenInfo.new(0.7, Enum.EasingStyle.Exponential), {BackgroundTransparency = 0}):Play()
+			TweenService:Create(Paragraph.UIStroke, TweenInfo.new(0.7, Enum.EasingStyle.Exponential), {Transparency = accent and 0.2 or 0}):Play()
+			TweenService:Create(Paragraph.Title, TweenInfo.new(0.7, Enum.EasingStyle.Exponential), {TextTransparency = 0}):Play()
+			TweenService:Create(Paragraph.Content, TweenInfo.new(0.7, Enum.EasingStyle.Exponential), {TextTransparency = 0}):Play()
+
+			function ParagraphValue:Set(NewParagraphSettings)
+				Paragraph.Title.Text = NewParagraphSettings.Title or Paragraph.Title.Text
+				Paragraph.Content.Text = NewParagraphSettings.Content or Paragraph.Content.Text
+			end
+
+			Rayfield.Main:GetPropertyChangedSignal('BackgroundColor3'):Connect(function()
+				Paragraph.BackgroundColor3 = SelectedTheme.SecondaryElementBackground
+				if not accent then Paragraph.UIStroke.Color = SelectedTheme.SecondaryElementStroke end
+			end)
+
+			return ParagraphValue
+		end
+
 		-- Input
 		function Tab:CreateInput(InputSettings)
 			local Input = Elements.Template.Input:Clone()
@@ -4637,22 +4678,31 @@ function RayfieldLibrary:CreateWindow(Settings)
 			)
 		end
 
-		MainTab:CreateSection("AKkiwi Scripts")
+		MainTab:CreateSection("🌀 AKkiwi Scripts")
 
-		MainTab:CreateParagraph({
-			Title   = "All scripts are FREE & KEYLESS",
-			Content = "Asked for a key? You got SCAMMED. Every script I make is free and keyless — always."
-				.. "\nI also make custom scripts on request, for free. Just ask on the Discord.",
+		MainTab:CreateRichParagraph({
+			Color   = Color3.fromRGB(85, 220, 120),
+			Title   = '<font color="#55DC78">✦ 100% FREE &amp; KEYLESS — ALWAYS</font>',
+			Content = '<font color="#FF6B6B"><b>Asked for a key? You got SCAMMED.</b></font>\n'
+				.. '<font color="#D8D5F0">Every script I make is free and keyless. No paywalls, no offerwalls, no keys.</font>\n'
+				.. '<font color="#B496FF">💡 I also make custom scripts on request — for free. Just ask on the Discord.</font>',
 		})
 
-		MainTab:CreateSection("Community")
+		MainTab:CreateSection("💬 Community")
+
+		MainTab:CreateRichParagraph({
+			Color   = Color3.fromRGB(120, 140, 255),
+			Title   = '<font color="#8AA0FF">Join the Discord</font>',
+			Content = '<font color="#D8D5F0">New scripts, updates, sneak peeks and script requests all happen here.</font>\n'
+				.. '<font color="#8AA0FF">👇 ' .. (discordUrl:gsub("https://", "")) .. '</font>',
+		})
 
 		MainTab:CreateButton({
-			Name = "Copy Discord invite  (" .. (discordUrl:gsub("https://", "")) .. ")",
+			Name = "📋 Copy Discord invite  (" .. (discordUrl:gsub("https://", "")) .. ")",
 			Callback = function()
 				pcall(setclipboard, discordUrl)
 				RayfieldLibrary:Notify({
-					Title = "Discord copied",
+					Title = "Discord copied ✅",
 					Content = "Invite copied to clipboard — paste it in your browser!",
 					Duration = 4,
 					Image = 4483362748,
@@ -4660,15 +4710,19 @@ function RayfieldLibrary:CreateWindow(Settings)
 			end,
 		})
 
-		MainTab:CreateSection("My script pages")
+		MainTab:CreateSection("🔗 My Script Pages")
+
+		MainTab:CreateRichParagraph({
+			Content = '<font color="#A5A0C0">Find all my scripts on these sites. Tap a button below to copy the link.</font>',
+		})
 
 		for _, lnk in ipairs(links) do
 			MainTab:CreateButton({
-				Name = "Copy " .. lnk.name .. " link",
+				Name = "📋 Copy " .. lnk.name .. " link",
 				Callback = function()
 					pcall(setclipboard, lnk.url)
 					RayfieldLibrary:Notify({
-						Title = lnk.name .. " copied",
+						Title = lnk.name .. " copied ✅",
 						Content = "Link copied to clipboard.",
 						Duration = 3,
 						Image = 4483362748,
