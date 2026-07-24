@@ -26,6 +26,8 @@ local _hasFS            = false -- true si l'executor supporte le filesystem
 local _pendingTheme     = nil   -- thème lu dans VoidPrefs, appliqué après construction UI
 local _currentThemeName = "Default" -- nom du thème actif, mis à jour par ChangeTheme
 local _suppressNotify   = false -- true pendant la restauration d'une config : avale les notifs des callbacks
+local _mainTabEnabled   = false -- true si Ui:MainCredit() a été appelé (crée l'onglet Main en 1er)
+local _mainTabOpts      = nil   -- config optionnelle passée à MainCredit()
 
 -- ════════════════════════════════════════════════════════════════════════════
 --  VOID HELPERS — couleurs et utilitaires pour les composants VoidUI greffés
@@ -1961,12 +1963,6 @@ function RayfieldLibrary:CreateWindow(Settings)
 	LoadingFrame.Title.Text = Settings.LoadingTitle or "Rayfield"
 	LoadingFrame.Subtitle.Text = Settings.LoadingSubtitle or "Interface Suite"
 
-	-- FIX: Settings.Name n'était jamais appliqué à la topbar (contrairement à tous les
-	-- autres composants qui font Component.Title.Text = ComponentSettings.Name)
-	if Topbar:FindFirstChild('Title') then
-		Topbar.Title.Text = Settings.Name or "Rayfield"
-	end
-
 	if Settings.LoadingTitle ~= "Rayfield Interface Suite" then
 		LoadingFrame.Version.Text = "Rayfield UI"
 	end
@@ -3882,18 +3878,20 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local dropH        = math.min(dropFullH, DROP_MAX_H)
 
 			-- Conteneur extérieur (bordure + positionnement)
+			-- Parenté à Rayfield.Main (pas TabPage) : TabPage est une ScrollingFrame,
+			-- qui force ClipsDescendants = true et coupait le dropdown au-delà de
+			-- sa zone visible (d'où l'impossibilité de scroller jusqu'aux dernières
+			-- raretés).
 			local dropList = VMakeFrame(Rayfield.Main,
-					UDim2.new(0, 0, 0, dropH),
-					UDim2.new(0, 0, 0, 0),
-					VC.BgMid, 0
+				UDim2.new(0, 0, 0, dropH),
+				UDim2.new(0, 0, 0, 0),
+				VC.BgMid, 0
 			)
 			dropList.Visible          = false
 			dropList.ZIndex           = 60
 			dropList.ClipsDescendants = false
 			VCorner(8, dropList)
 			VStroke(1, VC.Accent, dropList)
-
-
 
 			-- ScrollingFrame intérieur : gère le scroll, les boutons vivent dedans
 			local dropScroll = Instance.new("ScrollingFrame")
@@ -3913,6 +3911,48 @@ function RayfieldLibrary:CreateWindow(Settings)
 			dropLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			dropLayout.Parent    = dropScroll
 
+			-- Boutons ▲/▼ manuels : contournent tout souci de clip/wheel-routing
+			-- en manipulant directement CanvasPosition. Affichés seulement si
+			-- la liste dépasse la hauteur max visible.
+			if dropFullH > DROP_MAX_H then
+				local ARROW_H     = 18
+				local SCROLL_STEP = DROP_ITEM_H * 3
+
+				local function clampCanvasY(y)
+					local maxY = math.max(dropFullH - dropH, 0)
+					return math.clamp(y, 0, maxY)
+				end
+
+				local function makeArrowBtn(symbol, posY)
+					local btn = Instance.new("TextButton")
+					btn.Size                  = UDim2.new(1, 0, 0, ARROW_H)
+					btn.Position              = posY
+					btn.BackgroundColor3      = VC.BgMid
+					btn.BackgroundTransparency = 0.15
+					btn.BorderSizePixel       = 0
+					btn.AutoButtonColor       = false
+					btn.Text                  = symbol
+					btn.TextColor3            = VC.TextMid
+					btn.TextSize              = 12
+					btn.Font                  = Enum.Font.GothamBold
+					btn.ZIndex                = 63
+					btn.Parent                = dropList
+					btn.MouseEnter:Connect(function() btn.BackgroundTransparency = 0 end)
+					btn.MouseLeave:Connect(function() btn.BackgroundTransparency = 0.15 end)
+					return btn
+				end
+
+				local upBtn   = makeArrowBtn("▲", UDim2.new(0, 0, 0, 0))
+				local downBtn = makeArrowBtn("▼", UDim2.new(0, 0, 1, -ARROW_H))
+
+				upBtn.MouseButton1Click:Connect(function()
+					dropScroll.CanvasPosition = Vector2.new(0, clampCanvasY(dropScroll.CanvasPosition.Y - SCROLL_STEP))
+				end)
+				downBtn.MouseButton1Click:Connect(function()
+					dropScroll.CanvasPosition = Vector2.new(0, clampCanvasY(dropScroll.CanvasPosition.Y + SCROLL_STEP))
+				end)
+			end
+
 			local dropOpen = false
 
 			local function CloseDropdown()
@@ -3924,13 +3964,13 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local function UpdateDropPos()
 				local absPos  = dropBg.AbsolutePosition
 				local absSize = dropBg.AbsoluteSize
-				local sfPos   = Rayfield.Main.AbsolutePosition
+				local mainPos = Rayfield.Main.AbsolutePosition
 				dropList.Size     = UDim2.new(0, absSize.X, 0, dropH)
 				dropScroll.Size   = UDim2.new(1, 0, 0, dropH)
 				dropList.Position = UDim2.new(0,
-					absPos.X - sfPos.X,
+					absPos.X - mainPos.X,
 					0,
-					absPos.Y - sfPos.Y + absSize.Y + 2
+					absPos.Y - mainPos.Y + absSize.Y + 2
 				)
 			end
 
@@ -4116,9 +4156,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 				end
 			end)
 
-			UserInputService.InputBegan:Connect(function(input, processed)
+			UserInputService.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 and dropOpen then
-					if processed then return end  -- le clic a été capté par un bouton (option, flèche, etc.) — ne pas fermer
 					local mp    = UserInputService:GetMouseLocation()
 					local bPos  = dropBg.AbsolutePosition
 					local bSize = dropBg.AbsoluteSize
@@ -4129,7 +4168,6 @@ function RayfieldLibrary:CreateWindow(Settings)
 					if not inBtn and not inDrop then CloseDropdown() end
 				end
 			end)
-
 
 			BuildGrid(currentGroup)
 
@@ -4560,6 +4598,85 @@ function RayfieldLibrary:CreateWindow(Settings)
 		Title = 'VoidUI',
 		Content = 'Interface by AKkiwi — current version.\nAll my scripts are free and keyless.',
 	})
+
+	-- ════════════════════════════════════════════════════════════════════════
+	--  MAIN TAB — onglet d'accueil (Discord + liens). Remplace ShowCredit.
+	--  Activé via Ui:MainCredit() AVANT CreateWindow.
+	--  Construit ici APRÈS SettingsTab (qui est Ext/caché) et AVANT les onglets
+	--  du script → devient le 1er onglet VISIBLE, sélectionné par défaut.
+	-- ════════════════════════════════════════════════════════════════════════
+	if _mainTabEnabled then
+		local o = _mainTabOpts or {}
+		local discordUrl = o.Discord or "https://discord.gg/ddu37DWPJn"
+		local links = o.Links or {
+			{ name = "RScripts",    url = "https://rscripts.net/@akkiwi" },
+			{ name = "ScriptVerse", url = "https://scriptverse.net/u/akkiwi" },
+			{ name = "ScriptBlox",  url = "https://scriptblox.com/u/Akkiwi" },
+		}
+
+		-- Icône de tab : valide le nom lucide, fallback sans icône si introuvable
+		local iconArg = o.Icon
+		if iconArg == nil then iconArg = "house" end
+		if type(iconArg) == "string" then
+			local okIcon, iconRes = pcall(getIcon, iconArg)
+			if not okIcon or not iconRes then iconArg = 0 end
+		end
+
+		local MainTab = Window:CreateTab(o.TabName or "Main", iconArg)
+
+		-- Warning executor non supporté (Xeno / Solara) — label rouge persistant
+		local _execName = "Unknown"
+		pcall(function() _execName = identifyexecutor() or "Unknown" end)
+		local _low = string.lower(_execName)
+		if string.find(_low, "xeno", 1, true) or string.find(_low, "solara", 1, true) then
+			MainTab:CreateLabel(
+				"[!] " .. _execName .. " is NOT supported and may cause errors. Join the Discord for a working executor.",
+				nil,
+				Color3.fromRGB(230, 55, 75),
+				true
+			)
+		end
+
+		MainTab:CreateSection("AKkiwi Scripts")
+
+		MainTab:CreateParagraph({
+			Title   = "All scripts are FREE & KEYLESS",
+			Content = "Asked for a key? You got SCAMMED. Every script I make is free and keyless — always."
+				.. "\nI also make custom scripts on request, for free. Just ask on the Discord.",
+		})
+
+		MainTab:CreateSection("Community")
+
+		MainTab:CreateButton({
+			Name = "Copy Discord invite  (" .. (discordUrl:gsub("https://", "")) .. ")",
+			Callback = function()
+				pcall(setclipboard, discordUrl)
+				RayfieldLibrary:Notify({
+					Title = "Discord copied",
+					Content = "Invite copied to clipboard — paste it in your browser!",
+					Duration = 4,
+					Image = 4483362748,
+				})
+			end,
+		})
+
+		MainTab:CreateSection("My script pages")
+
+		for _, lnk in ipairs(links) do
+			MainTab:CreateButton({
+				Name = "Copy " .. lnk.name .. " link",
+				Callback = function()
+					pcall(setclipboard, lnk.url)
+					RayfieldLibrary:Notify({
+						Title = lnk.name .. " copied",
+						Content = "Link copied to clipboard.",
+						Duration = 3,
+						Image = 4483362748,
+					})
+				end,
+			})
+		end
+	end
 
 	return Window
 end
@@ -5347,6 +5464,21 @@ function RayfieldLibrary:CreateOverlay(cfg)
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
+--  MAIN CREDIT — enregistre l'onglet "Main" (Discord + liens).
+--  À appeler AVANT CreateWindow, comme ShowCredit :
+--      local Ui = loadstring(...)()
+--      Ui:MainCredit()
+--  Ne crée rien tout de suite : pose juste un flag. L'onglet est construit
+--  DANS CreateWindow pour être garanti premier onglet visible.
+--  opts (optionnel) : { Discord = "...", TabName = "...", Icon = "house"|0,
+--                       Links = { {name=, url=}, ... } }
+-- ════════════════════════════════════════════════════════════════════════════
+function RayfieldLibrary:MainCredit(opts)
+	_mainTabEnabled = true
+	_mainTabOpts    = opts or {}
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
 --  SHOW CREDIT — popup anti-scam avec liens Discord / RScripts
 -- ════════════════════════════════════════════════════════════════════════════
 function RayfieldLibrary:ShowCredit(onClose)
@@ -5425,7 +5557,7 @@ function RayfieldLibrary:ShowCredit(onClose)
 	discordBtn.Font             = Enum.Font.GothamBold
 	discordBtn.TextSize         = useMobile and 13 or 15
 	discordBtn.BorderSizePixel  = 0
-	discordBtn.Text             = "🎉 discord.gg/KWVTcdp9YW — JOIN US! (click to copy)"
+	discordBtn.Text             = "🎉 discord.gg/ztnxx5FJk — JOIN US! (click to copy)"
 	discordBtn.Parent           = bg
 	discordBtn.MouseButton1Click:Connect(function()
 		pcall(setclipboard, "https://discord.gg/KWVTcdp9YW")
