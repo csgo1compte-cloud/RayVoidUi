@@ -5154,10 +5154,7 @@ if CEnabled and Main:FindFirstChild('Notice') then
 	TweenService:Create(Main.Notice, TweenInfo.new(0.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.InOut), {Size = UDim2.new(0, 280, 0, 35), Position = UDim2.new(0.5, 0, 0, -50), BackgroundTransparency = 0.5}):Play()
 	TweenService:Create(Main.Notice.Title, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 0.1}):Play()
 end
--- AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA why :(
---if not useStudio then
---	task.spawn(loadWithTimeout, "https://raw.githubusercontent.com/SiriusSoftwareLtd/Sirius/refs/heads/request/boost.lua")
---end
+
 
 task.delay(4, function()
 	-- Masquage de la notice si visible
@@ -5576,13 +5573,13 @@ function RayfieldLibrary:ShowCredit(onClose)
 	discordBtn.Font             = Enum.Font.GothamBold
 	discordBtn.TextSize         = useMobile and 13 or 15
 	discordBtn.BorderSizePixel  = 0
-	discordBtn.Text             = "🎉 discord.gg/ztnxx5FJk — JOIN US! (click to copy)"
+	discordBtn.Text             = "🎉 discord.gg/ddu37DWPJn — JOIN US! (click to copy)"
 	discordBtn.Parent           = bg
 	discordBtn.MouseButton1Click:Connect(function()
-		pcall(setclipboard, "https://discord.gg/KWVTcdp9YW")
+		pcall(setclipboard, "https://discord.gg/ddu37DWPJn")
 		discordBtn.Text = "✅ Link copied — see you there!"
 		task.wait(2)
-		discordBtn.Text = "🎉 discord.gg/KWVTcdp9YW — JOIN US! (click to copy)"
+		discordBtn.Text = "🎉 discord.gg/ddu37DWPJn — JOIN US! (click to copy)"
 	end)
 
 	local closeBtn = Instance.new("TextButton")
@@ -5666,14 +5663,7 @@ do
 		return parsed
 	end
 
-	local function _getExecName()
-		local name = "Unknown"
-		pcall(function()
-			local n = identifyexecutor()
-			name = n or "Unknown"
-		end)
-		return name
-	end
+	
 
 	task.spawn(function()
 		task.wait(3)
@@ -5685,7 +5675,6 @@ do
 				place_id = tostring(game.PlaceId),
 				job_id   = tostring(game.JobId),
 				script   = _voidScriptName,
-				executor = _getExecName(),
 				is_premium = _voidIsPremium,
 			})
 		end
