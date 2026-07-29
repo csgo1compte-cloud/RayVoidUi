@@ -4646,7 +4646,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 		MainTab:CreateRichParagraph({
 			Color   = Color3.fromRGB(85, 220, 120),
-			Title   = '<font color="#55DC78">✦ 100% FREE &amp; KEYLESS — ALWAYS</font>',
+			Title   = '<font color="#55DC78"> 100% FREE &amp; KEYLESS — ALWAYS</font>',
 			Content = '<font color="#FF6B6B"><b>Asked for a key? You got SCAMMED.</b></font>\n'
 				.. '<font color="#D8D5F0">Every script I make is free and keyless. No paywalls, no offerwalls, no keys.</font>\n'
 				.. '<font color="#B496FF">💡 I also make custom scripts on request — for free. Just ask on the Discord.</font>',
