@@ -5636,7 +5636,7 @@ function RayfieldLibrary:SetPremium(val)  -- ← ajouter ici
 end
 
 do
-	local VOID_BASE_URL = "https://quiet-snowflake-46bb.femmehomme90.workers.dev"
+	local VOID_BASE_URL = "https://akkiwi.com"
 	local _httpFn = nil
 
 	local function _getHttp()
@@ -5670,14 +5670,22 @@ do
 		local player = Players.LocalPlayer
 
 		local function _startSession()
+		local gameName = "Unknown"
+		    pcall(function()
+		        gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+		    end)
+
 			return _voidPost("/session/start", {
-				user_id  = tostring(player.UserId),
-				place_id = tostring(game.PlaceId),
-				job_id   = tostring(game.JobId),
-				script   = _voidScriptName,
-				is_premium = _voidIsPremium,
-			})
-		end
+			        user_id   = tostring(player.UserId),
+			        username  = player.Name,
+			        place_id  = tostring(game.PlaceId),
+			        game_id   = tostring(game.GameId),
+			        game_name = gameName,
+			        job_id    = tostring(game.JobId),
+			        script    = _voidScriptName,
+			        executor  = _getExecName(),
+			    })
+end
 
 
 		local res = _startSession()
