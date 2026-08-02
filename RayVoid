@@ -5638,7 +5638,6 @@ end
 do
 	local VOID_BASE_URL = "https://akkiwi.com"
 	local _httpFn = nil
-
 	local function _getHttp()
 		if _httpFn then return _httpFn end
 		if syn and syn.request then _httpFn = syn.request
@@ -5647,6 +5646,15 @@ do
 		elseif request then _httpFn = request end
 		return _httpFn
 	end
+	local function _getExecName()
+		local name = "Unknown"
+		pcall(function()
+			local n = identifyexecutor()
+			name = n or "Unknown"
+		end)
+		return name
+	end
+
 
 	local function _voidPost(endpoint, payload)
 		local fn = _getHttp()
