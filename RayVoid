@@ -1380,25 +1380,34 @@ local function LoadConfiguration(rawContent, retry)
 	-- Avale les notifs des callbacks rejoués pendant toute la restauration
 	_suppressNotify = true
 
-	-- First pass: apply everything, collect flags whose callback threw
-	local pending = {}  -- { {flag=Flag, value=FlagValue}, ... }
+	-- First pass: apply everything with a known flag, collect flags whose
+	-- callback threw. Flags not yet in RayfieldLibrary.Flags (component not
+	-- built yet — e.g. a CardGrid created inside a deferred task.spawn that's
+	-- still waiting on WaitForChild/retries) are queued as "missing" instead
+	-- of being silently dropped, so the retry pass below gets a chance to
+	-- pick them up once the component finally registers.
+	local pending = {}  -- { {name=, flag=Flag, value=FlagValue}, ... } - Flag known, Set() threw
+	local missing = {}  -- { {name=, value=FlagValue}, ... } - Flag not registered yet
 	for FlagName, FlagValue in pairs(Data) do
 		local Flag = RayfieldLibrary.Flags[FlagName]
 		if Flag then
 			if not _applyFlag(Flag, FlagValue) then
 				table.insert(pending, { name = FlagName, flag = Flag, value = FlagValue })
 			end
+		else
+			table.insert(missing, { name = FlagName, value = FlagValue })
 		end
-		-- Flag missing → game update / component removed — silently ignored
 	end
 
-	-- Retry pass (auto-load only): give the game time to settle, retry failures
-	if retry and #pending > 0 then
-		local maxAttempts = 5
+	-- Retry pass (auto-load only): give the game (and deferred UI components)
+	-- time to settle, retry both failures and previously-missing flags.
+	if retry and (#pending > 0 or #missing > 0) then
+		local maxAttempts = 12
 		local waitBetween = 0.6
 		for _ = 1, maxAttempts do
-			if #pending == 0 then break end
+			if #pending == 0 and #missing == 0 then break end
 			task.wait(waitBetween)
+
 			local stillPending = {}
 			for _, entry in ipairs(pending) do
 				if not _applyFlag(entry.flag, entry.value) then
@@ -1406,7 +1415,27 @@ local function LoadConfiguration(rawContent, retry)
 				end
 			end
 			pending = stillPending
+
+			local stillMissing = {}
+			for _, entry in ipairs(missing) do
+				local Flag = RayfieldLibrary.Flags[entry.name]
+				if Flag then
+					if not _applyFlag(Flag, entry.value) then
+						table.insert(pending, { name = entry.name, flag = Flag, value = entry.value })
+					end
+				else
+					table.insert(stillMissing, entry)
+				end
+			end
+			missing = stillMissing
 		end
+	end
+
+	-- Whatever flag is still missing after all retries really doesn't exist
+	-- (game update / component removed) — fold it into pending so it's
+	-- reported the same way as a failed Set().
+	for _, entry in ipairs(missing) do
+		table.insert(pending, { name = entry.name })
 	end
 
 	-- Restauration terminée → on réautorise les notifs
