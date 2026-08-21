@@ -5729,7 +5729,7 @@ end
 		_voidSessionId = res.session_id
 
 		task.spawn(function()
-			while task.wait(300) do
+			while task.wait(600) do
 				if not _voidSessionId then break end
 				local hb = _voidPost("/heartbeat", { session_id = _voidSessionId })
 				if hb and hb.reregister then
