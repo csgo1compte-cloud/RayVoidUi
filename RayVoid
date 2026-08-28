@@ -4621,9 +4621,27 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	SettingsTab:CreateSection('Shortcut')
 
-	SettingsTab:CreateParagraph({
-		Title = 'Show/hide key',
-		Content = 'Active key: ' .. tostring(toggleKeybind) .. '\n(Changeable via ToggleUIKeybind in CreateWindow)',
+	-- Rebind de la touche show/hide, EN DIRECT depuis les settings.
+	-- CallOnChange = true : le Callback ne se declenche que quand on change
+	-- la touche (pas quand on l'appuie -- c'est le handler hotkey global qui
+	-- gere l'affichage). Le Flag persiste le choix dans la config du script.
+	-- `newKey` arrive deja avec la bonne casse (RayVoid le derive de
+	-- tostring(input.KeyCode)), donc on l'assigne tel quel -- le handler
+	-- hotkey fait Enum.KeyCode[toggleKeybind] a chaque frame.
+	SettingsTab:CreateKeybind({
+		Name = 'Show/hide key',
+		CurrentKeybind = toggleKeybind,
+		HoldToInteract = false,
+		CallOnChange = true,
+		Flag = 'SettingsToggleKey',
+		Callback = function(newKey)
+			if type(newKey) == 'string' and newKey ~= '' then
+				local ok = pcall(function() return Enum.KeyCode[newKey] end)
+				if ok then
+					toggleKeybind = newKey
+				end
+			end
+		end,
 	})
 
 	SettingsTab:CreateSection('Information')
@@ -4745,6 +4763,38 @@ end
 
 function RayfieldLibrary:IsVisible(): boolean
 	return not Hidden
+end
+
+-- Rebind (au runtime) la touche qui affiche/cache l'UI. Accepte une string
+-- ("K", "RightShift"...) ou un Enum.KeyCode. Le handler hotkey lit
+-- `toggleKeybind` en direct a chaque InputBegan, donc le changement est
+-- immediat, sans reconnexion. Equivalent runtime de Settings.ToggleUIKeybind
+-- passe a CreateWindow.
+function RayfieldLibrary:SetToggleKeybind(key)
+	local name
+	if typeof(key) == "EnumItem" and key.EnumType == Enum.KeyCode then
+		name = key.Name
+	elseif type(key) == "string" and key ~= "" then
+		-- D'abord tel quel (respecte la casse : "RightShift", "LeftControl"),
+		-- sinon en MAJUSCULES (pour "k" -> "K"). Enum.KeyCode["RIGHTSHIFT"]
+		-- n'existe pas, donc string.upper ne marche QUE pour les touches a
+		-- un seul caractere -- d'ou l'essai as-is en premier.
+		local ok, kc = pcall(function() return Enum.KeyCode[key] end)
+		if ok and typeof(kc) == "EnumItem" then
+			name = kc.Name
+		else
+			local ok2, kc2 = pcall(function() return Enum.KeyCode[string.upper(key)] end)
+			if ok2 and typeof(kc2) == "EnumItem" then
+				name = kc2.Name
+			end
+		end
+	end
+	if not name then
+		warn("[Rayfield] SetToggleKeybind: KeyCode invalide (" .. tostring(key) .. "), ignore")
+		return false
+	end
+	toggleKeybind = name
+	return true
 end
 
 local hideHotkeyConnection -- Has to be initialized here since the connection is made later in the script
