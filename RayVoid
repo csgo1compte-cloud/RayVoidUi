@@ -1450,18 +1450,14 @@ local function LoadConfiguration(rawContent, retry)
 	return true, errors
 end
 
--- Sauvegarde le slot donné (ou CActiveSlot) avec snapshot complet des flags.
--- Si le fichier existe déjà il est écrasé (clear + write).
-local function SaveConfiguration(slotName)
-	if not CEnabled then return end
-	if not _hasFS then return end
-	slotName = slotName or CActiveSlot
-	if not slotName or slotName == "" then
-		warn("RayVoid | SaveConfiguration: no active slot.")
-		return
-	end
-	if not CPlaceFolder then return end
+-- Partage de config entre joueurs, via le worker voidhub-configs. Tout est
+-- regroupé dans une table locale : le fichier a déjà beaucoup de locals
+-- au niveau module, une par fonction ferait grimper le compte pour rien.
+-- `script` est rempli par SetScriptName (déclaré plus bas dans le fichier).
+local _cfgShare = { baseUrl = "https://cfg.akkiwi.com", script = nil }
 
+-- Snapshot des flags, exactement le contenu écrit dans les .rfld.
+function _cfgShare.snapshot()
 	local flags = {}
 	for i, v in pairs(RayfieldLibrary.Flags) do
 		if v.Type == "ColorPicker" then
@@ -1480,6 +1476,85 @@ local function SaveConfiguration(slotName)
 			end
 		end
 	end
+	return flags
+end
+
+function _cfgShare.request(method, url, body)
+	local fn = (syn and syn.request) or (http and http.request) or http_request or request
+	if not fn then return nil, "Your executor cannot send HTTP requests." end
+
+	local opts = {
+		Url     = url,
+		Method  = method,
+		Headers = { ["Content-Type"] = "application/json", ["Accept"] = "application/json" },
+	}
+	if body then opts.Body = HttpService:JSONEncode(body) end
+
+	local ok, res = pcall(fn, opts)
+	if not ok or type(res) ~= "table" then return nil, "Could not reach the config server." end
+
+	local parsed
+	pcall(function() parsed = HttpService:JSONDecode(res.Body or res.body or "") end)
+	if type(parsed) ~= "table" then
+		return nil, "Bad answer from the config server (" .. tostring(res.StatusCode or res.status_code or "?") .. ")."
+	end
+	if parsed.ok ~= true then return nil, tostring(parsed.error or "Request refused.") end
+	return parsed
+end
+
+function _cfgShare.push(name)
+	local flags = _cfgShare.snapshot()
+	if not next(flags) then return nil, "Nothing to share yet." end
+	return _cfgShare.request("POST", _cfgShare.baseUrl .. "/share", {
+		place_id = tostring(game.PlaceId),
+		game_id  = tostring(game.GameId),
+		script   = _cfgShare.script,
+		name     = name,
+		config   = { placeId = game.PlaceId, flags = flags },
+	})
+end
+
+-- Accepte le code seul ("AB3D7KP2") comme le lien complet du worker.
+function _cfgShare.parseCode(input)
+	local s = tostring(input or ""):gsub("%s", "")
+	s = s:gsub("%?.*$", "")
+	s = s:match("([^/]+)$") or s
+	s = s:gsub("[^%w]", ""):upper()
+	if #s < 6 or #s > 16 then return nil end
+	return s
+end
+
+function _cfgShare.pull(input)
+	local code = _cfgShare.parseCode(input)
+	if not code then return nil, "Paste a config code or a share link." end
+
+	local res, err = _cfgShare.request("GET", _cfgShare.baseUrl .. "/c/" .. code)
+	if not res then return nil, err end
+	-- Le worker garde le PlaceId d'origine : on refuse ici plutôt que de
+	-- laisser LoadConfiguration échouer plus loin sur un message obscur.
+	if tostring(res.place_id) ~= tostring(game.PlaceId) then
+		return nil, "This config was made for another game."
+	end
+	if type(res.config) ~= "table" or type(res.config.flags) ~= "table" then
+		return nil, "This config is empty or corrupt."
+	end
+	res.code = res.code or code
+	return res
+end
+
+-- Sauvegarde le slot donné (ou CActiveSlot) avec snapshot complet des flags.
+-- Si le fichier existe déjà il est écrasé (clear + write).
+local function SaveConfiguration(slotName)
+	if not CEnabled then return end
+	if not _hasFS then return end
+	slotName = slotName or CActiveSlot
+	if not slotName or slotName == "" then
+		warn("RayVoid | SaveConfiguration: no active slot.")
+		return
+	end
+	if not CPlaceFolder then return end
+
+	local flags = _cfgShare.snapshot()
 
 	local payload = HttpService:JSONEncode({
 		placeId = game.PlaceId,
@@ -4462,6 +4537,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 	-- ════════════════════════════════════════════════════════════════════════
 	SettingsTab:CreateSection('Configurations')
 
+	-- Déclarés avant le if : la section Share plus bas s'en sert aussi, et
+	-- elle existe même quand la sauvegarde de config est désactivée.
+	local slotDropdown, _refreshSlotDropdown
+
 	if not CEnabled then
 		SettingsTab:CreateLabel('Config saving is not enabled for this script.', nil, nil, true)
 	else
@@ -4470,7 +4549,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		local noSlots = #configSlots == 0
 		if noSlots then configSlots = {"(none)"}end
 
-		local slotDropdown = SettingsTab:CreateDropdown({
+		slotDropdown = SettingsTab:CreateDropdown({
 			Name          = 'Active config',
 			Options       = configSlots,
 			CurrentOption = (CActiveSlot and {CActiveSlot}) or {configSlots[1]},
@@ -4478,7 +4557,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		})
 
 		-- Helper interne : rafraîchit le dropdown après création/suppression
-		local function _refreshSlotDropdown()
+		_refreshSlotDropdown = function()
 			local slots = _listConfigs()
 			if #slots == 0 then slots = {"(none)"} end
 			slotDropdown:Refresh(slots)
@@ -4591,6 +4670,94 @@ function RayfieldLibrary:CreateWindow(Settings)
 			autoLoadDropdown:Set({CAutoLoadSlot or "(disabled)"})
 		end
 	end  -- CEnabled
+
+	-- Partage/import d'une config via le worker voidhub-configs.
+	SettingsTab:CreateSection('Share config')
+
+	local shareBusy = false
+	SettingsTab:CreateButton({
+		Name     = 'Share my current config',
+		Callback = function()
+			if shareBusy then return end
+			shareBusy = true
+			task.spawn(function()
+				local slot = slotDropdown and slotDropdown.CurrentOption and slotDropdown.CurrentOption[1]
+				if slot == '(none)' then slot = nil end
+
+				local res, err = _cfgShare.push(slot or 'Shared config')
+				shareBusy = false
+
+				if not res then
+					RayfieldLibrary:Notify({Title = 'Share failed', Content = tostring(err), Duration = 6, Image = 4400704299, Force = true})
+					return
+				end
+
+				local copied = pcall(setclipboard, res.url)
+				RayfieldLibrary:Notify({
+					Title    = 'Shared — code ' .. tostring(res.code),
+					Content  = copied and 'Link copied to your clipboard, paste it wherever you want.'
+					                   or  (tostring(res.url) .. ' — give this code to your friends.'),
+					Duration = 10,
+					Image    = 4384403532,
+					Force    = true,
+				})
+			end)
+		end,
+	})
+
+	local importCode = ''
+	SettingsTab:CreateInput({
+		Name            = 'Config code or link',
+		PlaceholderText = 'e.g. AB3D7KP2',
+		RemoveTextAfterFocusLost = false,
+		Callback        = function(val) importCode = val end,
+	})
+
+	local importBusy = false
+	SettingsTab:CreateButton({
+		Name     = 'Import shared config',
+		Callback = function()
+			if importBusy then return end
+			importBusy = true
+			task.spawn(function()
+				local res, err = _cfgShare.pull(importCode)
+				importBusy = false
+
+				if not res then
+					RayfieldLibrary:Notify({Title = 'Import failed', Content = tostring(err), Duration = 6, Image = 4400704299, Force = true})
+					return
+				end
+
+				local payload = HttpService:JSONEncode(res.config)
+
+				-- On l'écrit d'abord comme slot local : la config importée
+				-- survit à la session et se recharge comme n'importe quelle
+				-- autre. Sans filesystem, on l'applique en mémoire seulement.
+				if CEnabled and _hasFS and CPlaceFolder then
+					local base = tostring(res.name or 'shared'):gsub('[<>:"/\\|?*]', '_')
+					base = base:sub(1, 24):match('^%s*(.-)%s*$')
+					if base == '' then base = 'shared' end
+
+					local slotName = base .. ' ' .. res.code
+					local path = CPlaceFolder .. '/' .. slotName .. ConfigurationExtension
+					if callSafely(writefile, path, payload) ~= false then
+						RayfieldLibrary:LoadConfiguration(slotName)
+						if _refreshSlotDropdown then _refreshSlotDropdown() end
+						return
+					end
+				end
+
+				local ok, errors = LoadConfiguration(payload, false)
+				if not ok then
+					RayfieldLibrary:Notify({Title = 'Import failed', Content = (errors and errors[1]) or 'Unknown error.', Duration = 6, Image = 4400704299, Force = true})
+				elseif #errors == 0 then
+					RayfieldLibrary:Notify({Title = res.code, Content = '✅ Config imported.', Duration = 4, Image = 4384403532, Force = true})
+				else
+					RayfieldLibrary:Notify({Title = res.code, Content = '⚠️ Imported (' .. #errors .. ' flag(s) skipped).', Duration = 5, Image = 4400704299, Force = true})
+				end
+			end)
+		end,
+	})
 
 	SettingsTab:CreateSection('Appearance')
 
@@ -5700,6 +5867,7 @@ local _voidSessionId  = nil
 
 function RayfieldLibrary:SetScriptName(name)
 	_voidScriptName = name or "Rayfield"
+	_cfgShare.script = _voidScriptName
 end
 
 -- Change le texte de la topbar à chaud (Topbar est un upvalue module-level).
