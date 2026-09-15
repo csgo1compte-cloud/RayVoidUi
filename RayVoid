@@ -4888,6 +4888,35 @@ function RayfieldLibrary:CreateWindow(Settings)
 			end,
 		})
 
+		MainTab:CreateSection("❤️ Support Me")
+
+		local paypalUrl = o.PayPal or "https://paypal.me/Akkiwi"
+		local solanaAddr = o.Solana or "3kj4auRyaqcW2PQ8MYFBcEEueV6PXUhdntYNBEHqYpzZ"
+
+		MainTab:CreateRichParagraph({
+			Color   = Color3.fromRGB(255, 120, 160),
+			Title   = '<font color="#FF78A0">Want to support me?</font>',
+			Content = '<font color="#D8D5F0">My scripts will always stay free. If you enjoy them and want to support my work, you can make a donation — every bit helps, thank you! 💖</font>',
+		})
+
+		for _, don in ipairs({
+			{ name = "PayPal", label = "📋 Copy PayPal link  (" .. (paypalUrl:gsub("https://", "")) .. ")", value = paypalUrl },
+			{ name = "Solana address", label = "📋 Copy Solana (SOL) address", value = solanaAddr },
+		}) do
+			MainTab:CreateButton({
+				Name = don.label,
+				Callback = function()
+					pcall(setclipboard, don.value)
+					RayfieldLibrary:Notify({
+						Title = don.name .. " copied ✅",
+						Content = "Thank you for your support! 💖",
+						Duration = 4,
+						Image = 4483362748,
+					})
+				end,
+			})
+		end
+
 		MainTab:CreateSection("🔗 My Script Pages")
 
 		MainTab:CreateRichParagraph({
