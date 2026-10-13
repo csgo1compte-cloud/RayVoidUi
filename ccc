@@ -620,6 +620,48 @@ function SESSION.Track(conn)
 	return conn
 end
 
+-- BUILD PACING (2026-10-13, "most of the categories are empty except
+-- teleport", "the UI opens but on a blank page" after a rejoin, Delta closing
+-- on inject). After the tabs exist, the rest of the menu -- hundreds of
+-- controls -- used to be built in ONE go without ever pausing. A PC does that
+-- in a second or two. A phone running the hub's obfuscated build takes many
+-- times longer, and a script that long without a break can be stopped by
+-- Roblox (the tabs built after that point stay empty -- Teleport was the
+-- first one fully done, so it was the only one that looked right) or the app
+-- frozen that long gets closed. On a busy rejoin the same happened before the
+-- first tab (Auto Farm) was filled: a blank page.
+-- Now the build takes a one-frame breath every 50ms of work. Only the thread
+-- building the menu ever waits here, and only until the build is finished.
+SESSION.buildThread = coroutine.running()
+SESSION.breathAt = os.clock()
+SESSION.made, SESSION.madeAt, SESSION.stage = 0, os.clock(), "starting"
+function SESSION.Breathe()
+	if SESSION.built or coroutine.running() ~= SESSION.buildThread then
+		return
+	end
+	if os.clock() - SESSION.breathAt >= 0.05 then
+		task.wait()
+		SESSION.breathAt = os.clock()
+	end
+end
+
+-- Phone/tablet or PC? Anything that fakes mouse input stays off phones.
+-- Asked once; the platform does not change mid-session.
+function SESSION.IsDesktop()
+	if SESSION.desktop == nil then
+		local UIS = game:GetService("UserInputService")
+		local ok, platform = pcall(function()
+			return UIS:GetPlatform()
+		end)
+		if ok and typeof(platform) == "EnumItem" then
+			SESSION.desktop = platform.Name == "Windows" or platform.Name == "OSX" or platform.Name == "UWP"
+		else
+			SESSION.desktop = UIS.KeyboardEnabled and UIS.MouseEnabled and not UIS.TouchEnabled
+		end
+	end
+	return SESSION.desktop
+end
+
 -- ONE feature moves your character at a time. Auto Farm and Auto Fish own
 -- it outright while on (everything else already stands down for them); the
 -- rest (quest trips, lost-item sweeps, train jobs) take turns through this
@@ -1165,6 +1207,175 @@ local Window = Ui:CreateWindow({
 	},
 })
 
+-- Our window. RayVoid renamed every older copy to "Rayfield-Old" while
+-- loading, so the one called exactly "Rayfield" is this run's.
+pcall(function()
+	local roots = {}
+	if type(gethui) == "function" then
+		table.insert(roots, gethui())
+	end
+	local core = game:GetService("CoreGui")
+	table.insert(roots, core)
+	table.insert(roots, core:FindFirstChild("RobloxGui"))
+	for _, root in ipairs(roots) do
+		local gui = root and root:FindFirstChild("Rayfield")
+		if gui and gui:FindFirstChild("Main") and gui.Main:FindFirstChild("Elements") then
+			SESSION.rayfield = gui
+			return
+		end
+	end
+end)
+
+-- Every control a tab creates goes through here: counted for the loading
+-- status, and the build breathes (see BUILD PACING at the top).
+function SESSION.Built(kind, first)
+	SESSION.made = SESSION.made + 1
+	SESSION.madeAt = os.clock()
+	if kind == "CreateSection" and type(first) == "string" then
+		SESSION.stage = first
+	end
+	SESSION.Breathe()
+end
+
+function SESSION.WrapTab(tab)
+	if type(tab) ~= "table" then
+		return tab
+	end
+	for key, real in pairs(tab) do
+		if type(real) == "function" and string.sub(key, 1, 6) == "Create" then
+			tab[key] = function(self, ...)
+				local out = table.pack(real(self, ...))
+				SESSION.Built(key, ...)
+				return table.unpack(out, 1, out.n)
+			end
+		end
+	end
+	return tab
+end
+
+SESSION.realCreateTab = Window.CreateTab
+Window.CreateTab = function(self, ...)
+	return SESSION.WrapTab(SESSION.realCreateTab(self, ...))
+end
+
+-- TEXT THAT FITS ITS BOX (2026-10-13, "make sure the words actually fit in
+-- the box. like under Load my backup when the script starts, the words are
+-- outside"). A RayVoid label is a fixed-height box: a sentence longer than
+-- one line wraps straight out of its top and bottom. Each label now grows to
+-- its text, and a paragraph whose text runs past its box grows too. Both are
+-- re-checked whenever their text changes (status boxes update all the time).
+function SESSION.FitLabel(frame)
+	local title = frame:FindFirstChild("Title")
+	if not (title and title:IsA("TextLabel")) then
+		return
+	end
+	if frame:GetAttribute("SHBaseH") == nil then
+		frame:SetAttribute("SHBaseH", math.max(frame.Size.Y.Offset, 30))
+	end
+	local base = frame:GetAttribute("SHBaseH")
+	local inset = title.Position.X.Offset
+	title.TextWrapped = true
+	title.AnchorPoint = Vector2.new(title.AnchorPoint.X, 0.5)
+	title.Position = UDim2.new(title.Position.X.Scale, inset, 0.5, 0)
+	local h = math.ceil(title.TextBounds.Y)
+	if h <= 0 then
+		return
+	end
+	local width = UDim.new(1, -(inset + 10))
+	if title.Size.X ~= width or math.abs(title.Size.Y.Offset - h) > 1 then
+		title.Size = UDim2.new(width, UDim.new(0, h))
+	end
+	local want = math.max(base, h + 18)
+	if math.abs(frame.Size.Y.Offset - want) > 1 then
+		frame.Size = UDim2.new(frame.Size.X, UDim.new(frame.Size.Y.Scale, want))
+	end
+end
+
+function SESSION.FitParagraph(frame)
+	local content = frame:FindFirstChild("Content")
+	if not (content and content:IsA("TextLabel")) then
+		return
+	end
+	content.TextWrapped = true
+	local title = frame:FindFirstChild("Title")
+	if title and title:IsA("TextLabel") then
+		title.TextWrapped = true
+	end
+	local textH = math.ceil(content.TextBounds.Y)
+	if textH <= 0 or frame.AbsoluteSize.Y <= 0 then
+		return
+	end
+	if frame:GetAttribute("SHBaseH") == nil then
+		frame:SetAttribute("SHBaseH", frame.Size.Y.Offset)
+	end
+	local top = content.AbsolutePosition.Y - frame.AbsolutePosition.Y
+	local need = math.ceil(top + textH + 12)
+	-- Only boxes the text actually overflows are touched (or ones grown here
+	-- before, so they can shrink back when their text gets shorter).
+	if need <= frame.AbsoluteSize.Y + 1 and not frame:GetAttribute("SHGrown") then
+		return
+	end
+	frame:SetAttribute("SHGrown", true)
+	local want = math.max(frame:GetAttribute("SHBaseH"), need)
+	if math.abs(frame.Size.Y.Offset - want) > 1 then
+		frame.Size = UDim2.new(frame.Size.X, UDim.new(frame.Size.Y.Scale, want))
+	end
+	if content.Size.Y.Scale == 0 and math.abs(content.Size.Y.Offset - textH) > 1 then
+		content.Size = UDim2.new(content.Size.X, UDim.new(0, textH))
+	end
+end
+
+function SESSION.FitElement(child)
+	if not child:IsA("Frame") then
+		return
+	end
+	local fit
+	if child:FindFirstChild("Content") and child:FindFirstChild("Title") then
+		fit = SESSION.FitParagraph
+	elseif child.Name == "Label" and child:FindFirstChild("Title") then
+		fit = SESSION.FitLabel
+	else
+		return
+	end
+	local function run()
+		pcall(fit, child)
+	end
+	for _, part in ipairs({ child:FindFirstChild("Title"), child:FindFirstChild("Content") }) do
+		if part and part:IsA("TextLabel") then
+			part:GetPropertyChangedSignal("TextBounds"):Connect(run)
+		end
+	end
+	child:GetPropertyChangedSignal("AbsoluteSize"):Connect(run)
+	task.defer(run)
+end
+
+-- Watches every page (one per tab) for the labels and paragraphs put on it.
+function SESSION.FitPages()
+	local elements = SESSION.rayfield and SESSION.rayfield.Main:FindFirstChild("Elements")
+	if not elements then
+		warn("[UI] menu window not found -- long labels may spill out of their boxes")
+		return
+	end
+	for _, page in ipairs(elements:GetChildren()) do
+		if page:IsA("ScrollingFrame") and page.Name ~= "Template" then
+			for _, child in ipairs(page:GetChildren()) do
+				SESSION.FitElement(child)
+			end
+			SESSION.Track(page.ChildAdded:Connect(SESSION.FitElement))
+			-- Taller boxes must still scroll fully into view ("i cant scroll
+			-- all the way down to read the full thing", 2026-10-11).
+			local layout = page:FindFirstChildOfClass("UIListLayout")
+			if layout and page.AutomaticCanvasSize == Enum.AutomaticSize.None then
+				local function sync()
+					page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
+				end
+				SESSION.Track(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(sync))
+				sync()
+			end
+		end
+	end
+end
+
 -- =========================================================
 -- SAFE CONFIG LOADING (2026-10-13). Delta users: "i can't load my previous
 -- configs and it will automatically close my roblox app". RayVoid's loader
@@ -1197,9 +1408,10 @@ function SESSION.cfg.Apply(data, label, atLaunch)
 	local ok, err = pcall(function()
 		if atLaunch then
 			-- Right after joining: let the character and the game settle first.
+			-- Up to 5 min: a phone builds the menu in breaths (BUILD PACING).
 			local waited = 0
 			while not (SESSION.built and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
-				and waited < 60 do
+				and waited < 300 and SESSION.alive do
 				task.wait(0.5)
 				waited = waited + 0.5
 			end
@@ -1334,6 +1546,46 @@ TABS.Extras = Window:CreateTab("Extras", 4483362458)
 local TeleportTab = Window:CreateTab("Teleport", 4483362458)
 local MiscTab = Window:CreateTab("Player & Safety", 4483362458)
 local ItemInfoTab = Window:CreateTab("Item Info", 4483362458)
+
+pcall(SESSION.FitPages)
+
+-- LOADING STATUS, top of the first tab. That tab's own controls are built
+-- late in the file, so on a slow phone or a fresh rejoin it used to sit empty
+-- while the rest loaded ("idk if it fully registered or not"). This says what
+-- is happening, says "Loaded" when everything is ready, and if loading ever
+-- stops halfway it says where, so the console line that explains it can be
+-- found.
+SESSION.loadStatus = AutoFarmTab:CreateParagraph({
+	Title = "Loading the script...",
+	Content = "Building the menus. Every tab fills in by itself in a moment.",
+})
+task.spawn(function()
+	local startedAt = os.clock()
+	while not SESSION.built and SESSION.alive do
+		task.wait(1)
+		local idle = os.clock() - SESSION.madeAt
+		local text
+		if idle > 45 then
+			text = "No progress for " .. math.floor(idle) .. "s at: " .. tostring(SESSION.stage)
+				.. ".\nIf this does not change within a minute, re-execute the script. If it happens again, "
+				.. "send the developer a screenshot of the console (F9 or your executor's console)."
+		else
+			text = "Building: " .. tostring(SESSION.stage) .. "  (" .. SESSION.made .. " controls, "
+				.. math.floor(os.clock() - startedAt) .. "s)\nEvery tab fills in by itself in a moment."
+		end
+		pcall(function()
+			SESSION.loadStatus:Set({ Title = "Loading the script...", Content = text })
+		end)
+	end
+	if SESSION.built then
+		pcall(function()
+			SESSION.loadStatus:Set({
+				Title = "Script loaded",
+				Content = "Every tab is ready (" .. math.floor(os.clock() - startedAt) .. "s). Start with STEP 1 below.",
+			})
+		end)
+	end
+end)
 
 -- The seven folded-away tabs are gone as variables too, not aliased: Lua 5.1
 -- caps the whole chunk at 200 locals and seven spare handles is not what that
@@ -3536,6 +3788,7 @@ local COLLECTORAUTO = {
 function COLLECTORAUTO.BuildOptions()
 	local set = {}
 	for _, def in pairs(Items) do
+		SESSION.Breathe()
 		if type(def) == "table" and type(def.Name) == "string" then
 			local a = def.Area
 			if type(a) == "table" then
@@ -4709,6 +4962,7 @@ local GRADE_RARITY_OPTIONS = (function()
 	local seen = {}
 	local names = {}
 	for _, def in pairs(Items) do
+		SESSION.Breathe()
 		if type(def) == "table" and type(def.Rarity) == "string" and def.Rarity ~= "" then
 			if not seen[def.Rarity] then
 				seen[def.Rarity] = true
@@ -4918,6 +5172,7 @@ local function GetDistinctItemCategories()
 	local seen = {}
 	local names = {}
 	for _, def in pairs(Items) do
+		SESSION.Breathe()
 		if type(def) == "table" and type(def.Category) == "string" and def.Category ~= "" then
 			if not seen[def.Category] then
 				seen[def.Category] = true
@@ -5024,6 +5279,7 @@ local function GetAllItemNames()
 	local seen = {}
 	local names = {}
 	for _, def in pairs(Items) do
+		SESSION.Breathe()
 		if type(def) == "table" and type(def.Name) == "string" and def.Name ~= "" then
 			if not seen[def.Name] then
 				seen[def.Name] = true
@@ -15309,9 +15565,9 @@ KEEP.selectedParagraph = TABS.Farm:CreateParagraph({ Title = "Keeping (0)", Cont
 
 -- Accessory value window: blank or 0 = no limit, so no extra on/off toggles.
 TABS.Farm:CreateInput({
-	Name = "Accessories: keep only if worth at least",
+	Name = "Keep accessories worth at least",
 	CurrentValue = "",
-	PlaceholderText = "blank = no minimum (e.g. 10k)",
+	PlaceholderText = "e.g. 10k",
 	Flag = "KeepAccMinInput2",
 	RemoveTextAfterFocusLost = false,
 	Callback = function(Text)
@@ -15323,9 +15579,9 @@ TABS.Farm:CreateInput({
 })
 
 TABS.Farm:CreateInput({
-	Name = "Accessories: keep only if worth at most",
+	Name = "Keep accessories worth at most",
 	CurrentValue = "",
-	PlaceholderText = "blank = no maximum (e.g. 1m)",
+	PlaceholderText = "e.g. 1m",
 	Flag = "KeepAccMaxInput2",
 	RemoveTextAfterFocusLost = false,
 	Callback = function(Text)
@@ -15335,6 +15591,8 @@ TABS.Farm:CreateInput({
 		KEEP.ShowSelected()
 	end,
 })
+
+TABS.Farm:CreateLabel("Accessory worth: leave a box blank for no limit.")
 
 -- The "etc.": any other rarity or category, same picker as everywhere else.
 CreateMultiSelect(TABS.Farm, {
@@ -17657,14 +17915,32 @@ function MOVE.StopAll()
 	pcall(MOVE.RestoreSpeed)
 	pcall(MOVE.RestoreJump)
 	pcall(MOVE.RestoreNoclip)
+	pcall(MOVE.Wire)
 end
 
-do
+-- The three per-frame listeners exist ONLY while fly, speed, jump or noclip
+-- is on (2026-10-13, phones). They used to stay connected from load to
+-- unload, three calls a frame all night with everything switched off.
+MOVE.conns = {}
+function MOVE.Wire()
+	local want = MOVE.fly or MOVE.speed or MOVE.noclip or MOVE.jump
+	if not want then
+		for _, conn in ipairs(MOVE.conns) do
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+		MOVE.conns = {}
+		return
+	end
+	if #MOVE.conns > 0 then
+		return
+	end
 	local RunService = game:GetService("RunService")
 	local UIS = game:GetService("UserInputService")
 
 	-- Noclip must run on Stepped (before physics) or collisions win the frame.
-	SESSION.Track(RunService.Stepped:Connect(function()
+	table.insert(MOVE.conns, SESSION.Track(RunService.Stepped:Connect(function()
 		if not MOVE.noclip then
 			return
 		end
@@ -17680,9 +17956,12 @@ do
 				part.CanCollide = false
 			end
 		end
-	end))
+	end)))
 
-	SESSION.Track(RunService.Heartbeat:Connect(function()
+	table.insert(MOVE.conns, SESSION.Track(RunService.Heartbeat:Connect(function()
+		if not (MOVE.speed or MOVE.jump) then
+			return
+		end
 		local hum = MOVE.Humanoid()
 		if not hum then
 			return
@@ -17706,11 +17985,11 @@ do
 				hum.JumpPower = MOVE.jumpPower
 			end
 		end
-	end))
+	end)))
 
 	-- Fly: WASD along the camera, Space up, Left Ctrl down. Mobile falls back
 	-- to the thumbstick (Humanoid.MoveDirection).
-	SESSION.Track(RunService.RenderStepped:Connect(function(dt)
+	table.insert(MOVE.conns, SESSION.Track(RunService.RenderStepped:Connect(function(dt)
 		if not MOVE.fly then
 			return
 		end
@@ -17822,7 +18101,7 @@ do
 				end
 			end
 		end
-	end))
+	end)))
 end
 
 -- Text box -> number in [lo, hi], or nil.
@@ -17845,6 +18124,7 @@ MiscTab:CreateToggle({
 		if not Value then
 			MOVE.StopFly()
 		end
+		MOVE.Wire()
 	end,
 })
 
@@ -17869,6 +18149,7 @@ MiscTab:CreateToggle({
 		if not Value then
 			MOVE.RestoreSpeed()
 		end
+		MOVE.Wire()
 	end,
 })
 
@@ -17893,6 +18174,7 @@ MiscTab:CreateToggle({
 		if not Value then
 			MOVE.RestoreJump()
 		end
+		MOVE.Wire()
 	end,
 })
 
@@ -17917,6 +18199,7 @@ MiscTab:CreateToggle({
 		if not Value then
 			MOVE.RestoreNoclip()
 		end
+		MOVE.Wire()
 	end,
 })
 
@@ -18534,19 +18817,23 @@ TABS.Extras:CreateParagraph({
 
 -- ANTI-AFK
 local antiAfkActive = false
-SESSION.afk = { text = "Off", disabled = 0 }
+SESSION.afk = { text = "Off", muted = {} }
 
--- Backup nudge (2026-10-13, "some people say the anti afk doesnt work
--- anymore"). The click below is the original and stays exactly as it was. It
--- cannot help in two cases, and this covers both:
---   * executors with no mouse1click at all (Delta on a phone)
---   * Roblox not being the window in front -- a real click goes to whatever
---     window IS in front, so an alt-tabbed PC was never clicking Roblox
--- Fires only when Roblox itself says you have gone idle (its 2-minute
--- warning, long before the 20-minute kick), and presses nothing on screen.
--- Connected once; does nothing while the toggle is off.
-SESSION.Track(LocalPlayer.Idled:Connect(function()
-	if not antiAfkActive then
+-- PHONE AND PC (2026-10-13 #2, "mobile users ... whenever they enable anti
+-- afk their whole game crashes ... make it universal"). The crash was the
+-- backup nudge added the day before: a faked VirtualUser click sent when
+-- Roblox says you went idle. Delta on a phone has no mouse1click, so on a
+-- phone that nudge was the ONLY thing running -- two minutes after the phone
+-- was put down. What runs now:
+--   1. EVERY device: Roblox's own idle-kick listener is switched off
+--      (getconnections on LocalPlayer.Idled). Nothing is clicked or pressed,
+--      so there is nothing for a phone to choke on. Back on with the toggle.
+--   2. PC only: the original click every 60s, exactly as before.
+--   3. PC only: the VirtualUser nudge when Roblox says idle (window in the
+--      background, where a real click lands in some other window).
+-- Phones never get 2 or 3.
+function SESSION.afk.OnIdled()
+	if not antiAfkActive or not SESSION.IsDesktop() then
 		return
 	end
 	local ok = pcall(function()
@@ -18554,34 +18841,91 @@ SESSION.Track(LocalPlayer.Idled:Connect(function()
 		vu:CaptureController()
 		vu:ClickButton2(Vector2.new())
 	end)
-	SESSION.afk.text = (ok and "Working" or "Backup failed") .. " -- Roblox said idle at " .. os.date("%H:%M")
-		.. ", backup nudge sent"
-end))
+	SESSION.afk.nudge = (ok and "nudge sent " or "nudge failed ") .. os.date("%H:%M")
+end
+if SESSION.IsDesktop() then
+	SESSION.Track(LocalPlayer.Idled:Connect(SESSION.afk.OnIdled))
+end
+
+-- on = true: every Idled listener but ours switched off; returns how many,
+-- or nil when this executor cannot list them. on = false: all back on.
+function SESSION.afk.MuteIdleKick(on)
+	if not on then
+		for _, c in ipairs(SESSION.afk.muted) do
+			pcall(function()
+				c:Enable()
+			end)
+		end
+		SESSION.afk.muted = {}
+		return 0
+	end
+	if type(getconnections) ~= "function" then
+		return nil
+	end
+	local okList, list = pcall(getconnections, LocalPlayer.Idled)
+	if not okList or type(list) ~= "table" then
+		return nil
+	end
+	-- Ours only exists on PC; on a phone every listener goes, unread.
+	local ours = SESSION.IsDesktop() and SESSION.afk.OnIdled or nil
+	local muted = {}
+	for _, c in ipairs(list) do
+		pcall(function()
+			if ours == nil or c.Function ~= ours then
+				c:Disable()
+				table.insert(muted, c)
+			end
+		end)
+	end
+	SESSION.afk.muted = muted
+	return #muted
+end
+
+function SESSION.afk.Describe(desktop, click)
+	local n = SESSION.afk.count
+	if not desktop then
+		if n and n > 0 then
+			return "On (phone) -- Roblox's idle kick is switched off. Nothing is tapped or clicked."
+		end
+		return "On (phone) -- this executor cannot switch off Roblox's idle kick, and fake taps are not "
+			.. "safe on a phone, so nothing else is tried. Turn on Auto Reconnect (below) so a kick brings you right back."
+	end
+	local parts = { (n and n > 0) and "idle kick switched off" or "idle kick still on (executor cannot switch it off)" }
+	table.insert(parts, click)
+	if SESSION.afk.nudge then
+		table.insert(parts, SESSION.afk.nudge)
+	end
+	return "On (PC) -- " .. table.concat(parts, ", ")
+end
 
 local function StartAntiAfk()
 	if LOOPGUARDS.antiAfk then return end
 	LOOPGUARDS.antiAfk = true
-	-- The original: a click every 60s. Tried replacing it with VirtualUser
-	-- (2026-10-12) and the user got kicked, so this is back as it was.
-	-- It clicks wherever the cursor is -- keep the cursor off this menu.
 	task.spawn(function()
+		local desktop = SESSION.IsDesktop()
+		local mutedAt = os.clock()
 		while antiAfkActive and LOOPGUARDS.antiAfk do
-			if type(mouse1click) ~= "function" then
-				-- Nothing to click with on this executor: the Idled backup above
-				-- does the job on its own.
-				SESSION.afk.text = "Working -- this executor has no click, using the backup"
-			else
+			-- New listeners can appear (respawn, the game's own scripts).
+			if os.clock() - mutedAt >= 300 then
+				mutedAt = os.clock()
+				SESSION.afk.count = SESSION.afk.MuteIdleKick(true)
+			end
+			-- PC: the original click, every 60s. It clicks wherever the cursor
+			-- is -- keep the cursor off this menu.
+			local click = "no click on this executor"
+			if desktop and type(mouse1click) == "function" then
 				local ok, err = pcall(function()
 					mouse1click()
 				end)
 				if ok then
 					DebugPrint("[AntiAFK] Simulated click")
-					SESSION.afk.text = "Working -- last click " .. os.date("%H:%M")
+					click = "last click " .. os.date("%H:%M")
 				else
 					warn("[AntiAFK] mouse1click failed: " .. tostring(err))
-					SESSION.afk.text = "Click failed (" .. tostring(err) .. "), using the backup"
+					click = "click failed"
 				end
 			end
+			SESSION.afk.text = SESSION.afk.Describe(desktop, click)
 			task.wait(60)
 		end
 		SESSION.afk.text = "Off"
@@ -18597,12 +18941,17 @@ MiscTab:CreateToggle({
 	Callback = function(Value)
 		antiAfkActive = Value
 		if antiAfkActive then
+			SESSION.afk.count = SESSION.afk.MuteIdleKick(true)
 			StartAntiAfk()
+		else
+			SESSION.afk.MuteIdleKick(false)
+			SESSION.afk.text = "Off"
 		end
 	end,
 })
 
-MiscTab:CreateLabel("Clicks every 60s to prevent the AFK kick, like before. It clicks where your cursor is, so leave the cursor off this menu. If Roblox still says you are idle (window in the background, or a phone), a backup nudge kicks in by itself.")
+MiscTab:CreateLabel("Stops Roblox's 20-minute idle kick, on phone and PC. On a phone nothing is ever tapped. "
+	.. "On PC it also clicks every 60s like before, so keep the cursor off this menu.")
 SESSION.afk.paragraph = MiscTab:CreateParagraph({ Title = "Anti-AFK status", Content = "Off" })
 task.spawn(function()
 	local last
@@ -18735,7 +19084,7 @@ if SESSION.cfg.AutoLoadOn() then
 	task.spawn(function()
 		-- After the whole menu exists (SESSION.built is set at the end of the file).
 		local waited = 0
-		while not SESSION.built and waited < 60 and SESSION.alive do
+		while not SESSION.built and waited < 300 and SESSION.alive do
 			task.wait(0.5)
 			waited = waited + 0.5
 		end
@@ -20015,7 +20364,8 @@ local RECONNECT = {
 -- Is this client actually still connected? While it is, NetworkClient holds
 -- its replicator; a kick or a drop removes it. Only trusted when it was seen
 -- at startup -- not every executor can look there. nil = cannot tell.
-do
+-- (A function, not a do-block: main-chunk locals are capped at 200.)
+function RECONNECT.FindNet()
 	local ok, net = pcall(function()
 		return game:GetService("NetworkClient")
 	end)
@@ -20026,6 +20376,7 @@ do
 		RECONNECT.net = net
 	end
 end
+RECONNECT.FindNet()
 
 function RECONNECT.Connected()
 	if not RECONNECT.net then
@@ -20229,7 +20580,7 @@ function RECONNECT.Describe()
 	if last and os.time() - last.at < 3600 then
 		tail = "\n\nLast rejoin: " .. os.date("%H:%M", last.at) .. " -- " .. last.why
 		if string.find(string.lower(last.why), "idle", 1, true) then
-			tail = tail .. "\nThat was Roblox's 20-minute idle kick: turn on Anti-AFK (Misc tab)."
+			tail = tail .. "\nThat was Roblox's 20-minute idle kick: turn on Anti-AFK (Player & Safety tab)."
 		end
 	end
 	if RECONNECT.stopped then
@@ -20272,7 +20623,7 @@ function RECONNECT.Go(reason, force)
 			end
 		end
 		if string.find(string.lower(tostring(reason) .. " " .. RECONNECT.ErrorCode()), "idle", 1, true) then
-			warn("[Reconnect] Roblox kicked you for being idle 20 minutes -- turn on Anti-AFK (Misc tab) so it stops happening")
+			warn("[Reconnect] Roblox kicked you for being idle 20 minutes -- turn on Anti-AFK (Player & Safety tab) so it stops happening")
 		end
 		local delays = { 5, 10, 20, 30, 45, 60 }
 		local attempt = 0
@@ -20354,47 +20705,51 @@ do
 	-- The disconnect prompt lives in CoreGui, which needs executor-level
 	-- access -- pcall'd, and said out loud if it is not reachable, because
 	-- without it only the GuiService signal is left.
-	local promptOk, overlay = pcall(function()
-		return game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 20):WaitForChild("promptOverlay", 20)
-	end)
-
-	if promptOk and overlay then
-		-- CoreGui is NOT rebuilt by a teleport, so the prompt from the
-		-- disconnect we just recovered from is still sitting here on arrival --
-		-- and it is a full-screen modal, which is why the script's own UI drew
-		-- fine but swallowed every click. Hide it, loudly.
-		local leftover = overlay:FindFirstChild("ErrorPrompt")
-		if leftover then
-			warn("[Reconnect] a disconnect prompt from the previous server was still on screen -- hiding it, it blocks every click")
-			pcall(function()
-				leftover.Visible = false
-			end)
-		end
-
-		-- The prompt's own words go along: they say WHY (idle, kicked, another
-		-- device...), which decides whether a rejoin makes sense at all.
-		SESSION.Track(overlay.ChildAdded:Connect(function(child)
-			if child.Name == "ErrorPrompt" then
-				task.wait(0.5) -- its text is filled in a moment after it appears
-				RECONNECT.Go("Roblox error box: " .. RECONNECT.ErrorText(child))
-			end
-		end))
-
-		-- Backstop for a prompt that is re-shown rather than re-created, which
-		-- ChildAdded would never see.
-		task.spawn(function()
-			while SESSION.alive do
-				local prompt = overlay:FindFirstChild("ErrorPrompt")
-				if prompt and prompt.Visible and not RECONNECT.rejoining
-					and not RECONNECT.stopped and os.clock() >= RECONNECT.skipUntil then
-					RECONNECT.Go("Roblox error box: " .. RECONNECT.ErrorText(prompt))
-				end
-				task.wait(3)
-			end
+	-- In its own thread: where CoreGui cannot be seen, the two waits below run
+	-- their full 20s each, and the menu used to sit unfinished behind them.
+	task.spawn(function()
+		local promptOk, overlay = pcall(function()
+			return game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 20):WaitForChild("promptOverlay", 20)
 		end)
-	else
-		warn("[Reconnect] the Roblox disconnect prompt is not reachable on this executor -- only the GuiService error signal is left, which may miss a silent disconnect")
-	end
+
+		if promptOk and overlay then
+			-- CoreGui is NOT rebuilt by a teleport, so the prompt from the
+			-- disconnect we just recovered from is still sitting here on arrival --
+			-- and it is a full-screen modal, which is why the script's own UI drew
+			-- fine but swallowed every click. Hide it, loudly.
+			local leftover = overlay:FindFirstChild("ErrorPrompt")
+			if leftover then
+				warn("[Reconnect] a disconnect prompt from the previous server was still on screen -- hiding it, it blocks every click")
+				pcall(function()
+					leftover.Visible = false
+				end)
+			end
+
+			-- The prompt's own words go along: they say WHY (idle, kicked, another
+			-- device...), which decides whether a rejoin makes sense at all.
+			SESSION.Track(overlay.ChildAdded:Connect(function(child)
+				if child.Name == "ErrorPrompt" then
+					task.wait(0.5) -- its text is filled in a moment after it appears
+					RECONNECT.Go("Roblox error box: " .. RECONNECT.ErrorText(child))
+				end
+			end))
+
+			-- Backstop for a prompt that is re-shown rather than re-created, which
+			-- ChildAdded would never see.
+			task.spawn(function()
+				while SESSION.alive do
+					local prompt = overlay:FindFirstChild("ErrorPrompt")
+					if prompt and prompt.Visible and not RECONNECT.rejoining
+						and not RECONNECT.stopped and os.clock() >= RECONNECT.skipUntil then
+						RECONNECT.Go("Roblox error box: " .. RECONNECT.ErrorText(prompt))
+					end
+					task.wait(3)
+				end
+			end)
+		else
+			warn("[Reconnect] the Roblox disconnect prompt is not reachable on this executor -- only the GuiService error signal is left, which may miss a silent disconnect")
+		end
+	end)
 end
 
 MiscTab:CreateSection("Auto Reconnect")
@@ -20489,6 +20844,7 @@ function ITEMINFO.Build()
 
 	local defByName = {}
 	for _, def in pairs(Items) do
+		SESSION.Breathe()
 		if type(def) == "table" and type(def.Name) == "string" then
 			defByName[def.Name] = def
 		end
@@ -20599,6 +20955,7 @@ function ITEMINFO.Build()
 	-- Reverse index: "Area: X" / "Garage: X" / "Event: X" -> item list.
 	local locSet = {}
 	for _, def in pairs(Items) do
+		SESSION.Breathe()
 		if type(def) == "table" and type(def.Name) == "string" then
 			for _, a in ipairs(asList(def.Area)) do
 				locSet["Area: " .. a] = true
@@ -20779,6 +21136,7 @@ do
 		COLLECTORKEEP.active = false
 		VEHICLESPAWN.autoEnabled = false
 		antiAfkActive = false
+		pcall(SESSION.afk.MuteIdleKick, false)
 		-- A reload must not leave a retry loop teleporting the player
 		-- out from under the new run.
 		RECONNECT.enabled = false
