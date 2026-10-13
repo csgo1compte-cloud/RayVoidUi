@@ -1,5 +1,5 @@
 -- Storage Hunters Open World - AKkiwi
---
+Print("new")
 -- FILE LAYOUT
 --   1. Services + base helpers (DebugPrint, SafeRequire, ReadMutatorNames)
 --   2. State tables, one per feature. ALL mutable state lives in them:
